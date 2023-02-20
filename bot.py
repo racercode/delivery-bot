@@ -1,4 +1,5 @@
 from discord.ext import commands
+from discord import app_commands
 from os import getenv
 from dotenv import load_dotenv
 import discord as dc
@@ -26,6 +27,14 @@ def clear():
     items = {}
     user_cost = {}
 
+@bot.event
+async def on_ready():
+    try:
+        synced = await bot.tree.sync()
+        print(f'Synced {len(synced)} command(s)')
+    except Exception as e:
+        print(e)
+
 async def check_permission(interaction, customer):
     global bot
     if interaction.user.id != customer:
@@ -34,15 +43,16 @@ async def check_permission(interaction, customer):
     else:
         return False
 
-@bot.command()
-async def addaddress(ctx, *, arg):
+@app_commands.describe(input_address = '外送地址')
+@bot.tree.command(name = 'addaddress')
+async def addaddress(interact: dc.Interaction, input_address: str):
     global address, code, organizer, bot
     if address == '':
-        address = arg
-        await ctx.send('外送地址新增成功 !')
-        organizer = ctx.message.author.id
-    elif ctx.message.author.id != organizer:
-        await ctx.send(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
+        address = input_address
+        await interact.response.send_message('外送地址新增成功 !')
+        organizer = interact.user.id
+    elif interact.user.id != organizer:
+        await interact.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
     else:
         check = Select(
             placeholder = '確認更改地址 ? 訂單會全部消除 !',
@@ -55,13 +65,13 @@ async def addaddress(ctx, *, arg):
         )
         view = View()
         view.add_item(check)
-        msg = await ctx.send(view = view)
+        msg = await interact.response.send_message(view = view)
         async def my_callback(interaction):
-            if ctx.message.author.id != organizer:
+            if interaction.user.id != organizer:
                 await interaction.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
             global address
             if check.values[0][0] == '是':
-                address = arg
+                address = input_address
                 await msg.delete()
                 await interaction.response.send_message('更改地址成功 !')
                 
@@ -76,22 +86,24 @@ async def addaddress(ctx, *, arg):
 
     
 
-@bot.command()
-async def search(ctx, *, arg):
+@app_commands.describe(input_name = '餐廳名稱')
+@bot.tree.command(name = 'search')
+async def search(interact: dc.Interaction, input_name: str):
     global address, organizer, count
+    ctx = bot.get_channel(interact.channel_id)
     if address == '':
-        await ctx.send('請先輸入外送地址')
+        await interact.response.send_message('請先輸入外送地址')
         return
-    elif ctx.message.author.id != organizer:
-        await ctx.send(f'請詢問訂單發起者{bot.get_user(organizer).mention}餐廳')
+    elif interact.user.id != organizer:
+        await interact.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}餐廳')
         return
     position = json.loads(rq.get('https://api.tomtom.com/search/2/geocode/' + address + '.json?key=' + getenv('TOMTOMAPIKEY') + '&countrySet=TW' + '&language=zh-TW').text)
     latitude = position['results'][0]['position']['lat']
     longtitude = position['results'][0]['position']['lon']
     headers = {'content-type': "application/json", "x-disco-client-id": "web"}
-    response = json.loads(rq.get(f'https://disco.deliveryhero.io/listing/api/v1/pandora/search?query={arg}&latitude={latitude}&longitude={longtitude}&configuration=Variation16&customer_id=&vertical=restaurants&search_vertical=restaurants&language_id=6&opening_type=delivery&session_id=&language_code=zh&customer_type=regular&limit=10&offset=0&country=tw&locale=zh_TW&use_free_delivery_label=false&tag_label_metadata=true&ncr_screen=NA%3ANA&ncr_place=search%3Alist', headers = headers).text)
+    response = json.loads(rq.get(f'https://disco.deliveryhero.io/listing/api/v1/pandora/search?query={input_name}&latitude={latitude}&longitude={longtitude}&configuration=Variation16&customer_id=&vertical=restaurants&search_vertical=restaurants&language_id=6&opening_type=delivery&session_id=&language_code=zh&customer_type=regular&limit=10&offset=0&country=tw&locale=zh_TW&use_free_delivery_label=false&tag_label_metadata=true&ncr_screen=NA%3ANA&ncr_place=search%3Alist', headers = headers).text)
     if response['data']['available_count'] == 0:
-        await ctx.send('你家太鄉下囉 ~ 沒有' + arg)
+        await interact.response.send_message('你家太鄉下囉 ~ 沒有' + input_name)
         return 
     restaurant_list = response['data']['items']
     select = Select(
@@ -152,12 +164,13 @@ async def search(ctx, *, arg):
 
     view = View()
     view.add_item(select)
-    await ctx.send(view = view)
+    await interact.response.send_message(view = view)
 
-@bot.command()
-async def order(ctx):
+@bot.tree.command(name = 'order')
+async def order(interact: dc.Interaction):
+    ctx = bot.get_channel(interact.channel_id)
     global response
-    author = ctx.author.id
+    author = interact.user.id
     global code, items
     category_headers = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36 Edg/92.0.902.73'}
     url = 'https://tw.fd-api.com/api/v5/vendors/' + code + '?include=menus&language_id=6&dynamic_pricing=0&opening_type=delivery&basket_currency=TWD'
@@ -287,10 +300,10 @@ async def order(ctx):
                                 choose = select5.values[0]
                                 if choose == '是':
                                     item = [option, ID, number_type, detail_dict, price + extra]
-                                    if ctx.author.id in items:
-                                        items[ctx.author.id].append(item)
+                                    if interact.user.id in items:
+                                        items[interact.user.id].append(item)
                                     else:
-                                        items[ctx.author.id] = [item]
+                                        items[interact.user.id] = [item]
                                     await interaction5.response.send_message('成功 !')
                                 else:
                                     await interaction5.response.send_message('取消')
@@ -343,10 +356,10 @@ async def order(ctx):
                         choose = select5.values[0]
                         if choose == '是':
                             item = [option, ID, number_type, detail_dict, products[ID]['product_variations'][number_type]['price']]
-                            if ctx.author.id in items:
-                                items[ctx.author.id].append(item)
+                            if interact.user.id in items:
+                                items[interact.user.id].append(item)
                             else:
-                                items[ctx.author.id] = [item]
+                                items[interact.user.id] = [item]
                             await interaction5.response.send_message('成功 !')
                         else:
                             await interaction5.response.send_message('取消')
@@ -384,27 +397,26 @@ async def order(ctx):
     select.callback = my_callback
     view = View()
     view.add_item(select)
-    await ctx.send(view = view)
+    await interact.response.send_message(view = view)
 
-@bot.command()
-async def get_name(ctx):
+@bot.tree.command(name = 'get_name')
+async def get_name(interact: dc.Interaction):
     global restaurant_name
-    await ctx.send(f'餐廳：{restaurant_name}')
+    await interact.response.send_message(f'餐廳：{restaurant_name}')
 
-@bot.command()
-async def view(ctx):
+@bot.tree.command(name = 'view')
+async def view(interact: dc.Interaction):
+    ctx = bot.get_channel(interact.channel_id)
     global items, response
     
     tot = 0
     
-    goods = items[ctx.author.id]
+    goods = items[interact.user.id]
     for i in range(0, len(goods)):
         tot += goods[i][4]
-    dect = ''
-    if tot != 0:
-        dect = f'總金額 : ${tot}'
-    else:
-        dect = '您尚未購賣任何餐點 !'
+    if tot == 0:
+        await interact.response.send_message('您尚未購賣任何餐點 !')
+        return
     embed = dc.Embed(
         title = '購物車品項',
     )
@@ -438,12 +450,13 @@ async def view(ctx):
                     value += ' / '
 
         embed.add_field(name = name, value = value)
-    await ctx.send(embed = embed)
+    await interact.response.send_message(embed = embed)
 
-@bot.command()
-async def edit(ctx):
+@bot.tree.command(name = 'edit')
+async def edit(interact: dc.Interaction):
+    ctx = bot.get_channel(interact.channel_id)
     global items, response
-    goods = items[ctx.author.id]
+    goods = items[interact.user.id]
     select = Select(
         placeholder = '請選擇要更改餐點',
         max_values = 1,
@@ -457,7 +470,7 @@ async def edit(ctx):
             description += '  ' + product["product_variations"][number_type]["name"]
         select.add_option(value = i, label = product['name'], description = description)
     async def my_callback(interaction):
-        if await check_permission(interaction, ctx.author.id):
+        if await check_permission(interaction, interact.user.id):
             return
         good = goods[int(select.values[0])]
         select2 = Select(
@@ -482,7 +495,7 @@ async def edit(ctx):
         
         
         async def my_callback2(interaction2):
-            if await check_permission(interaction2, ctx.author.id):
+            if await check_permission(interaction2, interact.user.id):
                 return
             id = int(select2.values[0])
             topping_id = product['topping_ids'][id]
@@ -503,7 +516,7 @@ async def edit(ctx):
                 select3.add_option(default = _default, value = i, label = label, description = description)
             
             async def my_callback3(interaction3):
-                if await check_permission(interaction3, ctx.author.id):
+                if await check_permission(interaction3, interact.user.id):
                     return
                 detail_list = []
                 cost = 0
@@ -512,8 +525,8 @@ async def edit(ctx):
                 for i in range(0, len(select3.values)):
                     cost += topping_description[str(topping_id)]['options'][int(select3.values[i])]['price']
                     detail_list.append(select3.values[i])
-                items[ctx.author.id][int(select.values[0])][3][int(select2.values[0])] = detail_list
-                items[ctx.author.id][int(select.values[0])][4] += cost
+                items[interact.user.id][int(select.values[0])][3][int(select2.values[0])] = detail_list
+                items[interact.user.id][int(select.values[0])][4] += cost
                 await interaction3.response.send_message('成功 !')
 
 
@@ -528,12 +541,13 @@ async def edit(ctx):
     select.callback = my_callback
     view = View()
     view.add_item(select)
-    await ctx.send(view = view)
+    await interact.response.send_message(view = view)
 
-@bot.command()
-async def delete(ctx):
+@bot.tree.command(name = 'delete')
+async def delete(interact: dc.Interaction):
+    ctx = bot.get_channel(interact.channel_id)
     global items, response
-    goods = items[ctx.author.id]
+    goods = items[interact.user.id]
     select = Select(
         placeholder = '請選擇要刪除餐點',
         max_values = 1,
@@ -547,20 +561,21 @@ async def delete(ctx):
             description += '  ' + product["product_variations"][number_type]["name"]
         select.add_option(value = i, label = product['name'], description = description)
     async def my_callback(interaction):
-        if await check_permission(interaction, ctx.author.id):
+        if await check_permission(interaction, interact.user.id):
             return
         id = int(select.values[0])
-        del items[ctx.author.id][id]
+        del items[interact.user.id][id]
         await interaction.response.send_message('成功 !')
     select.callback = my_callback
     view = View()
     view.add_item(select)
-    await ctx.send(view = view)
+    await interact.response.send_message(view = view)
 
-@bot.command()
-async def submit(ctx):
+@bot.tree.command(name = 'submit')
+async def submit(interact: dc.Interaction):
+    ctx = bot.get_channel(interact.channel_id)
     global items, response, organizer
-    if ctx.author.id != organizer:
+    if interact.user.id != organizer:
         await ctx.send(f'只有 **{bot.get_user(organizer).name}** 有權限選擇 !')
         return
     embed = dc.Embed(
@@ -594,12 +609,7 @@ async def submit(ctx):
     async def my_callback(interaction):
         if await check_permission(interaction, organizer):
             return
-        if select.values[0] == '是':
-            
-            
-            
-            
-            
+        if select.values[0] == '是': 
             await interaction.response.send_message('成功 !')
         else:
             await interaction.response.send_message('取消 !')
@@ -607,13 +617,7 @@ async def submit(ctx):
     select.callback = my_callback
     view = View()
     view.add_item(select)
-    await ctx.send(view = view)
-
-
-
-
-
-
+    await interact.response.send_message(view = view)
 
 TOKEN = getenv('TOKEN')
 bot.run(TOKEN)
