@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import discord as dc
 import requests as rq
 import json
-from discord.ui import Select, View
+from discord.ui import Select, View, Modal
 intents = dc.Intents.all()
 intents.message_content = True
 load_dotenv()
@@ -29,6 +29,7 @@ def clear():
 
 @bot.event
 async def on_ready():
+    clear()
     try:
         synced = await bot.tree.sync()
         print(f'Synced {len(synced)} command(s)')
@@ -43,52 +44,39 @@ async def check_permission(interaction, customer):
     else:
         return False
 
-@app_commands.describe(input_address = '外送地址')
-@bot.tree.command(name = 'addaddress')
-async def addaddress(interact: dc.Interaction, input_address: str):
-    global address, code, organizer, bot
-    if address == '':
-        address = input_address
+class add_address_modal(Modal, title = '新增外送地址'):
+    delivery_address = dc.ui.TextInput(label = '請輸入你要外送的地址', required = True)
+    async def on_submit(self, interact: dc.Interaction):
+        print(self.delivery_address, type(self.delivery_address))
+        global address, code, organizer
+        address = self.delivery_address
         await interact.response.send_message('外送地址新增成功 !')
         organizer = interact.user.id
-    elif interact.user.id != organizer:
+
+@bot.tree.command(name = 'addaddress', description = '新增外送地址')
+async def addaddress(interact: dc.Interaction):
+    global organizer
+    if address != '' and interact.user.id != organizer:
+        await interact.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
+    elif address != '':
+        await interact.response.send_message('請刪除原有訂單 !')
+    else:
+        await interact.response.send_modal(add_address_modal())
+    
+@bot.tree.command(name = 'delete_restaurant', description = '刪除餐廳')
+async def delete_restaurant(interact: dc.Interaction):
+    global address
+    if interact.user.id != organizer:
         await interact.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
     else:
-        check = Select(
-            placeholder = '確認更改地址 ? 訂單會全部消除 !',
-            max_values = 1,
-            min_values = 1,
-            options = [
-                dc.SelectOption(label = '是'),
-                dc.SelectOption(label = '否')
-            ]
-        )
-        view = View()
-        view.add_item(check)
-        msg = await interact.response.send_message(view = view)
-        async def my_callback(interaction):
-            if interaction.user.id != organizer:
-                await interaction.response.send_message(f'請詢問訂單發起者{bot.get_user(organizer).mention}，唯其可取消訂單')
-            global address
-            if check.values[0][0] == '是':
-                address = input_address
-                await msg.delete()
-                await interaction.response.send_message('更改地址成功 !')
-                
-            else :
-                await msg.delete()
-                await interaction.response.send_message('取消')
-            
-                
-        check.callback = my_callback
-        await msg.delete(delay = 120.0)
-        
-
+        address = ''
+        clear()
+        await interact.response.send_message('成功 !')
     
 
-@app_commands.describe(input_name = '餐廳名稱')
-@bot.tree.command(name = 'search')
-async def search(interact: dc.Interaction, input_name: str):
+@app_commands.describe(restaurant_name = '餐廳名稱')
+@bot.tree.command(name = 'search', description = '尋找餐廳')
+async def search(interact: dc.Interaction, restaurant_name: str):
     global address, organizer, count
     ctx = bot.get_channel(interact.channel_id)
     if address == '':
@@ -101,9 +89,9 @@ async def search(interact: dc.Interaction, input_name: str):
     latitude = position['results'][0]['position']['lat']
     longtitude = position['results'][0]['position']['lon']
     headers = {'content-type': "application/json", "x-disco-client-id": "web"}
-    response = json.loads(rq.get(f'https://disco.deliveryhero.io/listing/api/v1/pandora/search?query={input_name}&latitude={latitude}&longitude={longtitude}&configuration=Variation16&customer_id=&vertical=restaurants&search_vertical=restaurants&language_id=6&opening_type=delivery&session_id=&language_code=zh&customer_type=regular&limit=10&offset=0&country=tw&locale=zh_TW&use_free_delivery_label=false&tag_label_metadata=true&ncr_screen=NA%3ANA&ncr_place=search%3Alist', headers = headers).text)
+    response = json.loads(rq.get(f'https://disco.deliveryhero.io/listing/api/v1/pandora/search?query={restaurant_name}&latitude={latitude}&longitude={longtitude}&configuration=Variation16&customer_id=&vertical=restaurants&search_vertical=restaurants&language_id=6&opening_type=delivery&session_id=&language_code=zh&customer_type=regular&limit=10&offset=0&country=tw&locale=zh_TW&use_free_delivery_label=false&tag_label_metadata=true&ncr_screen=NA%3ANA&ncr_place=search%3Alist', headers = headers).text)
     if response['data']['available_count'] == 0:
-        await interact.response.send_message('你家太鄉下囉 ~ 沒有' + input_name)
+        await interact.response.send_message('你家太鄉下囉 ~ 沒有' + restaurant_name)
         return 
     restaurant_list = response['data']['items']
     select = Select(
@@ -166,7 +154,7 @@ async def search(interact: dc.Interaction, input_name: str):
     view.add_item(select)
     await interact.response.send_message(view = view)
 
-@bot.tree.command(name = 'order')
+@bot.tree.command(name = 'order', description = '點餐')
 async def order(interact: dc.Interaction):
     ctx = bot.get_channel(interact.channel_id)
     global response
@@ -399,12 +387,15 @@ async def order(interact: dc.Interaction):
     view.add_item(select)
     await interact.response.send_message(view = view)
 
-@bot.tree.command(name = 'get_name')
+@bot.tree.command(name = 'get_name', description = '現在餐廳名稱')
 async def get_name(interact: dc.Interaction):
     global restaurant_name
-    await interact.response.send_message(f'餐廳：{restaurant_name}')
+    if restaurant_name == '':
+        await interact.response.send_message('您還沒選擇餐廳 !')
+    else:
+        await interact.response.send_message(f'餐廳：{restaurant_name}')
 
-@bot.tree.command(name = 'view')
+@bot.tree.command(name = 'view', description = '查詢你的訂購餐點')
 async def view(interact: dc.Interaction):
     ctx = bot.get_channel(interact.channel_id)
     global items, response
@@ -452,7 +443,7 @@ async def view(interact: dc.Interaction):
         embed.add_field(name = name, value = value)
     await interact.response.send_message(embed = embed)
 
-@bot.tree.command(name = 'edit')
+@bot.tree.command(name = 'edit', description = '更改餐點細項')
 async def edit(interact: dc.Interaction):
     ctx = bot.get_channel(interact.channel_id)
     global items, response
@@ -543,7 +534,7 @@ async def edit(interact: dc.Interaction):
     view.add_item(select)
     await interact.response.send_message(view = view)
 
-@bot.tree.command(name = 'delete')
+@bot.tree.command(name = 'delete', description = '刪除餐點')
 async def delete(interact: dc.Interaction):
     ctx = bot.get_channel(interact.channel_id)
     global items, response
@@ -571,7 +562,7 @@ async def delete(interact: dc.Interaction):
     view.add_item(select)
     await interact.response.send_message(view = view)
 
-@bot.tree.command(name = 'submit')
+@bot.tree.command(name = 'submit', description = '提交')
 async def submit(interact: dc.Interaction):
     ctx = bot.get_channel(interact.channel_id)
     global items, response, organizer
