@@ -3,3 +3,9 @@ test.txt
 test.py
 tempCodeRunnerFile.py
 _discord.py
+.replit
+replit.nix
+pyproject.toml
+poetry.lock
+.breakpoints
+venv
